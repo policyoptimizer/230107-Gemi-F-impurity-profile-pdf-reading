@@ -1,5 +1,6 @@
 # dcc.Download 활용
 # 엑셀, 이미지 다운로드 됨
+# 현재까지 Best
 
 import dash
 from dash import dcc, html
@@ -18,7 +19,7 @@ from dataiku import Folder
 
 # Layout 설정
 app.layout = html.Div([
-    html.H1("CSV 파일 업로드 및 처리"),
+    html.H1("CSV File Upload and Processing"),
    
     dcc.Upload(
         id='upload-data',
@@ -43,6 +44,7 @@ app.layout = html.Div([
    
     html.Hr(),
    
+    html.Div(id='image-container'),  # 이미지가 표시될 컨테이너
     html.Div(id='download-links'),
     dcc.Download(id="download-csv"),
     dcc.Download(id="download-img")
@@ -72,7 +74,7 @@ def create_heatmap(df):
     # 히트맵 생성
     fig, ax = plt.subplots(figsize=(20, 10))
     sns.heatmap(final_result_df, annot=True, fmt=".2f", cmap='coolwarm', linewidths=.5, linecolor='gray', ax=ax)
-    plt.title('Sample Base Name 별 RRT 대비 % Area 평균', fontsize=20)
+    plt.title('Average % Area vs RRT by Sample Base Name', fontsize=20)
     plt.xlabel('Sample Base Name', fontsize=14)
     plt.ylabel('RRT', fontsize=14)
 
@@ -87,29 +89,33 @@ def create_heatmap(df):
 # Callbacks
 @app.callback(
     [Output('output-data-upload', 'children'),
-     Output('download-links', 'children')],
+     Output('download-links', 'children'),
+     Output('image-container', 'children')],
     [Input('upload-data', 'contents')],
     [State('upload-data', 'filename')]
 )
 def update_output(contents, filename):
     if contents is None:
-        return None, None
+        return None, None, None
    
     df, _ = parse_contents(contents, filename)
     img_data, processed_df = create_heatmap(df)
    
     # Save image and CSV to Managed Folder
     csv_bytes = processed_df.to_csv(index=True).encode()
-    # download 버튼을 위한 링크 생성
     csv_download_link = dcc.send_bytes(csv_bytes, f'processed_{filename}')
     img_download_link = dcc.send_bytes(img_data, f'heatmap_{filename.replace(".csv", ".png")}')
    
-    return html.Div([f'파일 {filename}이 처리되었습니다.']), html.Div([
-        html.Button("CSV 다운로드", id="btn_csv_download"),
-        html.Button("이미지 다운로드", id="btn_img_download"),
+    # 이미지를 base64로 인코딩하여 웹앱에 표시
+    img_base64 = base64.b64encode(img_data).decode('utf-8')
+    img_element = html.Img(src='data:image/png;base64,{}'.format(img_base64), style={'width': '80%', 'height': 'auto'})
+   
+    return html.Div([f'File {filename} processed successfully.']), html.Div([
+        html.Button("Download CSV", id="btn_csv_download"),
+        html.Button("Download Image", id="btn_img_download"),
         dcc.Download(id="download-csv"),
         dcc.Download(id="download-img")
-    ])
+    ]), img_element
 
 
 @app.callback(
