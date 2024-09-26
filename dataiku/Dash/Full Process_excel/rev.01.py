@@ -7,29 +7,30 @@ from dash.dependencies import Input, Output, State
 import pandas as pd
 import io
 import base64
+from dataiku import Folder
+import logging
 import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
-from dataiku import Folder
-import logging
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 
-# Dataiku Managed Folder 설정 (Folder ID를 정확히 설정하세요)
-folder = Folder("uploaded_excels")  # 예시: 'uploaded_excels' Managed Folder ID
+# Dataiku Managed Folder 설정 (실제 사용 중인 Folder ID로 변경 필요)
+folder = Folder("uploaded_excels")  # 실제 사용 중인 Folder ID로 변경
 
 # Dataiku에서 제공하는 Dash 앱 인스턴스 사용
-#app = dash.Dash(__name__, suppress_callback_exceptions=True)
+# app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
 # Dash 업로드 크기 제한 설정 (필요 시 조정)
-app.server.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
+# app.server.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
+# Dataiku 환경에서는 app.server 설정이 필요 없을 수 있습니다.
 
 # 레이아웃 설정
 app.layout = html.Div([
-    html.H1("엑셀 파일 업로드 및 데이터 처리"),
+    html.H1("엑셀 파일 업로드 및 데이터 전처리 및 히트맵 생성"),
    
-    # 엑셀 파일 업로드 컴포넌트
+    # 엑셀 파일 업로드 컴포넌트 (multiple=True로 여러 파일 업로드 허용)
     dcc.Upload(
         id='upload-excels',
         children=html.Div([
@@ -48,27 +49,16 @@ app.layout = html.Div([
         },
         multiple=True  # 여러 파일 업로드 허용
     ),
-   
+
     html.Div(id='output-excel-upload'),
+
+    html.Button("Download Aggregated CSV", id="btn-download-csv", n_clicks=0, style={'margin': '10px'}),
+    dcc.Download(id="download-dataframe-csv"),
    
-    html.Hr(),
-   
-    # 데이터 처리 및 시각화 섹션
-    html.H2("데이터 처리 및 시각화"),
-   
-    html.Button("데이터 처리 및 시각화 실행", id="process-button", n_clicks=0, style={'margin': '20px'}),
-   
-    html.Div(id='processed-data-output'),
-   
-    html.Div(id='image-container', style={'margin': '20px'}),
-   
-    # 다운로드 버튼
-    html.Div([
-        html.Button("CSV 다운로드", id="btn_csv_download", style={'margin': '10px'}),
-        html.Button("히트맵 이미지 다운로드", id="btn_img_download", style={'margin': '10px'}),
-        dcc.Download(id="download-csv"),
-        dcc.Download(id="download-img")
-    ])
+    html.Button("Download Heatmap Image", id="btn-download-img", n_clicks=0, style={'margin': '10px'}),
+    dcc.Download(id="download-heatmap-img"),
+
+    html.Div(id='image-container')  # 히트맵 이미지가 표시될 컨테이너
 ])
 
 # Helper 함수: 엑셀 파일 내용을 파싱하여 DataFrame 반환
@@ -81,63 +71,105 @@ def parse_excel(contents, filename):
         # G3 셀 (0-based 인덱스: 행 2, 열 6)에 있는 Sample Name 추출
         sample_name = excel_data.iloc[2, 6]
         logging.info(f"Extracted Sample Name: {sample_name} from {filename}")
-       
+
         # 실제 데이터는 20번째 행부터 시작 (0-based 인덱스 19)
-        data_df = pd.read_excel(io.BytesIO(decoded), header=19)
-        logging.info(f"Data extracted from {filename} with shape {data_df.shape}")
-       
-        # Sample Name 컬럼 추가
-        data_df['Sample Name'] = sample_name
-       
-        return data_df, filename
+        raw_data = pd.read_excel(io.BytesIO(decoded), header=19, dtype=str)
+        logging.info(f"Data extracted from {filename} with shape {raw_data.shape}")
+
+        # 첫 번째 세트 (A, C, F, G, H, J, L, D, E)
+        df1 = pd.DataFrame({
+            'Sample Name': sample_name,
+            'Peak Number': pd.to_numeric(raw_data.iloc[:, 0], errors='coerce'),  # A
+            'RT': pd.to_numeric(raw_data.iloc[:, 2], errors='coerce'),  # C
+            'Area': pd.to_numeric(raw_data.iloc[:, 5], errors='coerce'),  # F
+            'Height': pd.to_numeric(raw_data.iloc[:, 6], errors='coerce'),  # G
+            '% Area': pd.to_numeric(raw_data.iloc[:, 7], errors='coerce'),  # H
+            'Total Area': pd.to_numeric(raw_data.iloc[:, 9], errors='coerce'),  # J
+            'Int Type': raw_data.iloc[:, 11],  # L
+            'Area_extra1': pd.to_numeric(raw_data.iloc[:, 3], errors='coerce'),  # D
+            'Area_extra2': pd.to_numeric(raw_data.iloc[:, 4], errors='coerce'),  # E
+        })
+
+        # 두 번째 세트 (M, O, Q, R, S, T, U, P, Q)
+        df2 = pd.DataFrame({
+            'Sample Name': sample_name,
+            'Peak Number': pd.to_numeric(raw_data.iloc[:, 12], errors='coerce'),  # M
+            'RT': pd.to_numeric(raw_data.iloc[:, 14], errors='coerce'),  # O
+            'Area': pd.to_numeric(raw_data.iloc[:, 16], errors='coerce'),  # Q
+            'Height': pd.to_numeric(raw_data.iloc[:, 17], errors='coerce'),  # R
+            '% Area': pd.to_numeric(raw_data.iloc[:, 18], errors='coerce'),  # S
+            'Total Area': pd.to_numeric(raw_data.iloc[:, 19], errors='coerce'),  # T
+            'Int Type': raw_data.iloc[:, 20],  # U
+            'Area_extra3': pd.to_numeric(raw_data.iloc[:, 15], errors='coerce'),  # P
+            'Area_extra4': pd.to_numeric(raw_data.iloc[:, 16], errors='coerce'),  # Q
+        })
+
+        # 두 DataFrame 합치기
+        combined_df = pd.concat([df1, df2], ignore_index=True)
+
+        # Area 데이터 정제 (Area_extra1~4을 이용)
+        combined_df['Area'] = combined_df['Area'].fillna(combined_df['Area_extra1']) \
+                                            .fillna(combined_df['Area_extra2']) \
+                                            .fillna(combined_df['Area_extra3']) \
+                                            .fillna(combined_df['Area_extra4'])
+
+        # 필요 없는 Area_extra 컬럼 삭제
+        combined_df = combined_df.drop(columns=['Area_extra1', 'Area_extra2', 'Area_extra3', 'Area_extra4'])
+
+        # Peak Number가 NaN인 행 제거
+        combined_df = combined_df.dropna(subset=['Peak Number'])
+        combined_df['Peak Number'] = combined_df['Peak Number'].astype(int)
+
+        # 피크 넘버가 1~24인 데이터만 포함
+        combined_df = combined_df[combined_df['Peak Number'].between(1, 24)]
+
+        # Sort by 'Sample Name' and 'Peak Number'
+        combined_df = combined_df.sort_values(by=['Sample Name', 'Peak Number']).reset_index(drop=True)
+
+        # 필요한 컬럼만 선택
+        combined_df = combined_df[['Sample Name', 'Peak Number', 'RT', 'Area', 'Height', '% Area', 'Total Area', 'Int Type']]
+
+        logging.info(f"Parsed DataFrame from {filename} with {len(combined_df)} rows.")
+
+        return combined_df, filename, None
     except Exception as e:
         logging.error(f"Error parsing {filename}: {e}")
-        return pd.DataFrame(), filename
-
-# Helper 함수: Area 데이터 오류 수정
-def fix_area_data(df):
-    try:
-        # D열 (Index 3)와 E열 (Index 4)의 데이터를 F열 ('Area')으로 이동
-        df['Area'] = df['F']  # 기본적으로 F열 값을 Area로 설정
-        df.loc[df['D'].notna(), 'Area'] = df.loc[df['D'].notna(), 'D']  # D열에 값이 있으면 Area로 설정
-        df.loc[df['E'].notna(), 'Area'] = df.loc[df['E'].notna(), 'E']  # E열에 값이 있으면 Area로 설정
-
-        # P열 (Index 15)의 데이터를 Q열 (Index 16)의 Area로 이동
-        df['Area_Q'] = df['Q']
-        df.loc[df['P'].notna(), 'Area_Q'] = df.loc[df['P'].notna(), 'P']
-       
-        # Area_Q가 있는 경우 Area 컬럼에 추가
-        df_final = pd.concat([df, df['Area_Q']], axis=0).reset_index(drop=True)
-        df_final = df_final.drop(columns=['Area_Q'])
-       
-        logging.info("Area data fixed successfully.")
-        return df_final
-    except Exception as e:
-        logging.error(f"Error fixing area data: {e}")
-        return df
+        return pd.DataFrame(), filename, str(e)
 
 # Helper 함수: 히트맵 생성
 def create_heatmap(df):
     try:
+        # Sample Base Name 추출
         df['Sample Base Name'] = df['Sample Name'].str.split('-').str[0]
-        max_rt_per_sample = df.groupby('Sample Name')['RT'].transform('max')
-        df['RRT'] = (df['RT'] / max_rt_per_sample).round(2)
-        avg_area_per_rrt = df.groupby(['Sample Name', 'RRT'])['Area'].mean().reset_index()
-        pivot_df = avg_area_per_rrt.pivot(index='RRT', columns='Sample Name', values='Area')
        
+        # 각 Sample Name별 최대 Area의 RT 계산
+        max_rt_per_sample = df.loc[df.groupby('Sample Name')['Area'].idxmax()].set_index('Sample Name')['RT']
+       
+        # RRT 계산
+        df['RRT'] = df.apply(lambda row: row['RT'] / max_rt_per_sample.get(row['Sample Name'], 1), axis=1)
+        df['RRT'] = df['RRT'].round(2)
+       
+        # Sample Base Name별 RRT에 따른 평균 % Area 계산
+        avg_area_per_rrt = df.groupby(['Sample Name', 'RRT'])['% Area'].mean().reset_index()
+       
+        # 피벗 테이블 생성
+        pivot_df = avg_area_per_rrt.pivot(index='RRT', columns='Sample Name', values='% Area')
+       
+        # Sample Base Name별 평균 % Area 계산
         base_names = df['Sample Base Name'].unique()
         for base_name in base_names:
             sample_columns = [col for col in pivot_df.columns if base_name in col]
             if sample_columns:
                 pivot_df[base_name] = pivot_df[sample_columns].mean(axis=1)
        
+        # 중복된 Sample Base Name 컬럼 제거
         final_result_df = pivot_df[base_names]
         final_result_df = final_result_df.loc[:, ~final_result_df.columns.duplicated()]
 
         # 히트맵 생성
         fig, ax = plt.subplots(figsize=(20, 10))
         sns.heatmap(final_result_df, annot=True, fmt=".2f", cmap='coolwarm', linewidths=.5, linecolor='gray', ax=ax)
-        plt.title('Average Area vs RRT by Sample Base Name', fontsize=20)
+        plt.title('Average % Area vs RRT by Sample Base Name', fontsize=20)
         plt.xlabel('Sample Base Name', fontsize=14)
         plt.ylabel('RRT', fontsize=14)
 
@@ -147,149 +179,71 @@ def create_heatmap(df):
         plt.close(fig)
         img_io.seek(0)
        
-        logging.info("Heatmap created successfully.")
         return img_io.getvalue(), final_result_df
     except Exception as e:
         logging.error(f"Error creating heatmap: {e}")
         return None, pd.DataFrame()
 
-# 콜백: 엑셀 파일 업로드 후 결과 출력
+# 콜백: 엑셀 파일 업로드 후 결과 처리
 @app.callback(
-    Output('output-excel-upload', 'children'),
+    [Output('output-excel-upload', 'children'),
+     Output('image-container', 'children'),
+     Output('download-dataframe-csv', 'data'),
+     Output('download-heatmap-img', 'data')],
     [Input('upload-excels', 'contents')],
     [State('upload-excels', 'filename')]
 )
-def update_output(contents, filenames):
-    if contents is not None and filenames is not None:
-        all_data = pd.DataFrame()
-        for content, filename in zip(contents, filenames):
-            df, fname = parse_excel(content, filename)
-            if df.empty:
-                logging.warning(f"No data extracted from {fname}.")
-                continue
-            df = fix_area_data(df)
-            if not df.empty:
-                all_data = pd.concat([all_data, df], ignore_index=True)
-        if not all_data.empty:
-            # 현재 날짜를 YYYYMMDD 형식으로 가져오기
-            current_date = pd.Timestamp.now().strftime("%Y%m%d")
-            # 파일명에 날짜 포함
-            csv_filename = f'aggregated_results_{current_date}.csv'
-            # CSV를 Managed Folder에 저장
-            try:
-                with folder.get_writer(csv_filename) as writer:
-                    writer.write(all_data.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig'))
-                logging.info(f"Aggregated CSV saved as {csv_filename}.")
-                return html.Div([
-                    html.H3(f"엑셀 파일 {len(filenames)}개가 성공적으로 업로드 및 처리되었습니다."),
-                    html.P(f"Aggregated CSV: {csv_filename} 저장 완료.")
-                ])
-            except Exception as e:
-                logging.error(f"Error saving aggregated CSV: {e}")
-                return html.Div("CSV 파일 저장 중 오류가 발생했습니다.")
-        else:
-            return html.Div("업로드된 엑셀 파일에서 데이터를 추출할 수 없습니다.")
-    return None
-
-# 콜백: 데이터 처리 및 시각화 실행
-@app.callback(
-    [Output('processed-data-output', 'children'),
-     Output('image-container', 'children')],
-    [Input('process-button', 'n_clicks')],
-    [State('upload-excels', 'contents'),
-     State('upload-excels', 'filename')],
-    prevent_initial_call=True
-)
-def process_and_visualize(n_clicks, contents, filenames):
-    if n_clicks and contents and filenames:
-        all_data = pd.DataFrame()
-        for content, filename in zip(contents, filenames):
-            df, fname = parse_excel(content, filename)
-            if df.empty:
-                logging.warning(f"No data extracted from {fname}.")
-                continue
-            df = fix_area_data(df)
-            if not df.empty:
-                all_data = pd.concat([all_data, df], ignore_index=True)
-        if not all_data.empty:
-            img_data, processed_df = create_heatmap(all_data)
-            if img_data is None:
-                return html.Div("히트맵 생성 중 오류가 발생했습니다."), None
-
-            # 이미지를 base64로 인코딩하여 웹앱에 표시
-            img_base64 = base64.b64encode(img_data).decode('utf-8')
-            img_element = html.Img(src='data:image/png;base64,{}'.format(img_base64), style={'width': '80%', 'height': 'auto'})
-           
-            # 최종 CSV 파일 생성 및 저장
-            final_csv_filename = f'final_results_{pd.Timestamp.now().strftime("%Y%m%d")}.csv'
-            try:
-                with folder.get_writer(final_csv_filename) as writer:
-                    processed_df.to_csv(writer, index=True, encoding='utf-8-sig')
-                logging.info(f"Final CSV saved as {final_csv_filename}.")
-            except Exception as e:
-                logging.error(f"Error saving final CSV: {e}")
-                return html.Div("최종 CSV 파일 저장 중 오류가 발생했습니다."), img_element
-           
-            return (
-                html.Div([
-                    html.H3("데이터 처리 및 시각화가 완료되었습니다."),
-                    html.P(f"처리된 데이터는 {processed_df.shape[0]}개의 행과 {processed_df.shape[1]}개의 열을 포함합니다."),
-                    html.P(f"Final CSV: {final_csv_filename} 저장 완료.")
-                ]),
-                img_element
-            )
-        else:
-            return html.Div("데이터 처리 중 오류가 발생했습니다."), None
-    return None, None
-
-# 콜백: CSV 다운로드
-@app.callback(
-    Output("download-csv", "data"),
-    Input("btn_csv_download", "n_clicks"),
-    prevent_initial_call=True,
-)
-def download_csv(n_clicks):
-    if n_clicks:
-        try:
-            # 현재 날짜를 YYYYMMDD 형식으로 가져오기
-            current_date = pd.Timestamp.now().strftime("%Y%m%d")
-            final_csv_filename = f'final_results_{current_date}.csv'
-            # Managed Folder에서 파일 읽기
-            with folder.get_reader(final_csv_filename) as reader:
-                csv_content = reader.read()
-            logging.info(f"CSV 파일 {final_csv_filename} 다운로드 요청.")
-            return dcc.send_bytes(csv_content, final_csv_filename)
-        except Exception as e:
-            logging.error(f"Error downloading CSV: {e}")
-            return None
-    return None
-
-# 콜백: 히트맵 이미지 다운로드
-@app.callback(
-    Output("download-img", "data"),
-    Input("btn_img_download", "n_clicks"),
-    [State('upload-excels', 'contents'),
-     State('upload-excels', 'filename')],
-    prevent_initial_call=True,
-)
-def download_img(n_clicks, contents, filenames):
-    if n_clicks and contents and filenames:
-        all_data = pd.DataFrame()
-        for content, filename in zip(contents, filenames):
-            df, fname = parse_excel(content, filename)
-            if df.empty:
-                logging.warning(f"No data extracted from {fname}.")
-                continue
-            df = fix_area_data(df)
-            if not df.empty:
-                all_data = pd.concat([all_data, df], ignore_index=True)
-        if not all_data.empty:
-            img_data, _ = create_heatmap(all_data)
-            if img_data is None:
-                return None
-            logging.info("히트맵 이미지 다운로드 요청.")
-            return dcc.send_bytes(img_data, "heatmap.png")
-    return None
+def process_upload(list_of_contents, list_of_names):
+    if list_of_contents is not None and list_of_names is not None:
+        aggregated_df = pd.DataFrame()
+        for contents, name in zip(list_of_contents, list_of_names):
+            df, fname, parse_error = parse_excel(contents, name)
+            if parse_error:
+                return (html.Div([
+                            html.H3(f"엑셀 파일 '{fname}'에서 데이터를 추출할 수 없습니다."),
+                            html.P(f"오류 메시지: {parse_error}")
+                        ]),
+                        None,
+                        None,
+                        None)
+            # Append to aggregated_df
+            aggregated_df = pd.concat([aggregated_df, df], ignore_index=True)
+       
+        # Remove duplicates if any
+        aggregated_df = aggregated_df.drop_duplicates()
+       
+        # 히트맵 생성
+        img_data, heatmap_df = create_heatmap(aggregated_df)
+        if img_data is None:
+            return (html.Div([
+                        html.H3(f"히트맵 생성 중 오류가 발생했습니다.")
+                    ]),
+                    None,
+                    None,
+                    None)
+       
+        # 히트맵 이미지를 base64로 인코딩하여 웹앱에 표시
+        img_base64 = base64.b64encode(img_data).decode('utf-8')
+        img_element = html.Img(src='data:image/png;base64,{}'.format(img_base64), style={'width': '80%', 'height': 'auto'})
+       
+        # CSV 다운로드 준비
+        csv_string = aggregated_df.to_csv(index=False, encoding='utf-8-sig')
+        csv_data = dict(content=csv_string, filename="aggregated_results.csv")
+       
+        # 히트맵 이미지 다운로드 준비
+        heatmap_img = dict(content=img_data, filename="heatmap_results.png")
+       
+        return (
+            html.Div([
+                html.H3(f"엑셀 파일들이 성공적으로 업로드 및 처리되었습니다."),
+                html.P(f"총 {len(aggregated_df)}개의 피크 데이터가 추출되었습니다.")
+            ]),
+            img_element,
+            csv_data,
+            heatmap_img
+        )
+   
+    return (None, None, None, None)
 
 # Dash 앱 실행 (Dataiku 환경에 맞게 수정 필요)
 if __name__ == '__main__':
