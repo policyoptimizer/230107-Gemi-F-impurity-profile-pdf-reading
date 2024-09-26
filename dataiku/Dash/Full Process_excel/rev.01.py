@@ -1,5 +1,5 @@
-# 잘 안됨. 
-# 처음부터 수정해야 함.
+# 일단 되긴 하는데 엑셀 파일이 내가 원하는 형식이 아님
+# 이미지도 좀 더 두고봐야 함
 
 import dash
 from dash import dcc, html
@@ -20,11 +20,9 @@ logging.basicConfig(level=logging.INFO)
 folder = Folder("uploaded_excels")  # 실제 사용 중인 Folder ID로 변경
 
 # Dataiku에서 제공하는 Dash 앱 인스턴스 사용
+# Dataiku 환경에서는 이미 'app' 객체가 정의되어 있을 가능성이 있습니다.
+# 따라서, 별도의 Dash 인스턴스를 생성하지 않고 기존 'app' 객체를 사용합니다.
 # app = dash.Dash(__name__, suppress_callback_exceptions=True)
-
-# Dash 업로드 크기 제한 설정 (필요 시 조정)
-# app.server.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB
-# Dataiku 환경에서는 app.server 설정이 필요 없을 수 있습니다.
 
 # 레이아웃 설정
 app.layout = html.Div([
@@ -52,13 +50,20 @@ app.layout = html.Div([
 
     html.Div(id='output-excel-upload'),
 
-    html.Button("Download Aggregated CSV", id="btn-download-csv", n_clicks=0, style={'margin': '10px'}),
-    dcc.Download(id="download-dataframe-csv"),
-   
-    html.Button("Download Heatmap Image", id="btn-download-img", n_clicks=0, style={'margin': '10px'}),
-    dcc.Download(id="download-heatmap-img"),
+    # 다운로드 버튼 및 히트맵 이미지 표시
+    html.Div([
+        html.Button("Download Aggregated CSV", id="btn-download-csv", n_clicks=0, style={'margin': '10px'}),
+        dcc.Download(id="download-dataframe-csv"),
+       
+        html.Button("Download Heatmap Image", id="btn-download-img", n_clicks=0, style={'margin': '10px'}),
+        dcc.Download(id="download-heatmap-img"),
+    ]),
 
     html.Div(id='image-container')  # 히트맵 이미지가 표시될 컨테이너
+
+    # dcc.Store를 사용하여 중간 데이터를 저장
+    # dcc.Store(id='aggregated-data-store'),  # 필요 시 활성화
+    # dcc.Store(id='heatmap-image-store'),   # 필요 시 활성화
 ])
 
 # Helper 함수: 엑셀 파일 내용을 파싱하여 DataFrame 반환
@@ -187,9 +192,7 @@ def create_heatmap(df):
 # 콜백: 엑셀 파일 업로드 후 결과 처리
 @app.callback(
     [Output('output-excel-upload', 'children'),
-     Output('image-container', 'children'),
-     Output('download-dataframe-csv', 'data'),
-     Output('download-heatmap-img', 'data')],
+     Output('image-container', 'children')],
     [Input('upload-excels', 'contents')],
     [State('upload-excels', 'filename')]
 )
@@ -203,8 +206,6 @@ def process_upload(list_of_contents, list_of_names):
                             html.H3(f"엑셀 파일 '{fname}'에서 데이터를 추출할 수 없습니다."),
                             html.P(f"오류 메시지: {parse_error}")
                         ]),
-                        None,
-                        None,
                         None)
             # Append to aggregated_df
             aggregated_df = pd.concat([aggregated_df, df], ignore_index=True)
@@ -218,32 +219,97 @@ def process_upload(list_of_contents, list_of_names):
             return (html.Div([
                         html.H3(f"히트맵 생성 중 오류가 발생했습니다.")
                     ]),
-                    None,
-                    None,
                     None)
        
         # 히트맵 이미지를 base64로 인코딩하여 웹앱에 표시
         img_base64 = base64.b64encode(img_data).decode('utf-8')
         img_element = html.Img(src='data:image/png;base64,{}'.format(img_base64), style={'width': '80%', 'height': 'auto'})
        
-        # CSV 다운로드 준비
-        csv_string = aggregated_df.to_csv(index=False, encoding='utf-8-sig')
-        csv_data = dict(content=csv_string, filename="aggregated_results.csv")
-       
-        # 히트맵 이미지 다운로드 준비
-        heatmap_img = dict(content=img_data, filename="heatmap_results.png")
-       
+        # 저장된 데이터를 Managed Folder에 업로드 (선택 사항)
+        # 예를 들어, aggregated_df와 heatmap_df를 폴더에 저장할 수 있습니다.
+        # 아래는 예시 코드입니다. 필요에 따라 활성화하세요.
+        '''
+        try:
+            # CSV 저장
+            csv_content = aggregated_df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            with folder.get_writer("aggregated_results.csv") as writer:
+                writer.write(csv_content)
+           
+            # 히트맵 이미지 저장
+            with folder.get_writer("heatmap_results.png") as writer:
+                writer.write(img_data)
+           
+            logging.info("Aggregated CSV and Heatmap Image saved successfully.")
+        except Exception as e:
+            logging.error(f"Error saving files to Managed Folder: {e}")
+        '''
+
+        # 업데이트된 데이터를 dcc.Store에 저장하는 대신, 다운로드 콜백에서 직접 처리
         return (
             html.Div([
                 html.H3(f"엑셀 파일들이 성공적으로 업로드 및 처리되었습니다."),
                 html.P(f"총 {len(aggregated_df)}개의 피크 데이터가 추출되었습니다.")
             ]),
-            img_element,
-            csv_data,
-            heatmap_img
+            img_element
         )
+
+# 콜백: CSV 파일 다운로드
+@app.callback(
+    Output("download-dataframe-csv", "data"),
+    Input("btn-download-csv", "n_clicks"),
+    State('upload-excels', 'contents'),
+    State('upload-excels', 'filename'),
+    prevent_initial_call=True,
+)
+def download_csv(n_clicks, list_of_contents, list_of_names):
+    if n_clicks > 0 and list_of_contents is not None and list_of_names is not None:
+        aggregated_df = pd.DataFrame()
+        for contents, name in zip(list_of_contents, list_of_names):
+            df, fname, parse_error = parse_excel(contents, name)
+            if parse_error:
+                continue  # Skip files with errors
+            # Append to aggregated_df
+            aggregated_df = pd.concat([aggregated_df, df], ignore_index=True)
+       
+        # Remove duplicates if any
+        aggregated_df = aggregated_df.drop_duplicates()
+       
+        # CSV 문자열 생성
+        csv_string = aggregated_df.to_csv(index=False, encoding='utf-8-sig')
+       
+        return dict(content=csv_string, filename="aggregated_results.csv")
    
-    return (None, None, None, None)
+    return None
+
+# 콜백: 히트맵 이미지 다운로드
+@app.callback(
+    Output("download-heatmap-img", "data"),
+    Input("btn-download-img", "n_clicks"),
+    State('upload-excels', 'contents'),
+    State('upload-excels', 'filename'),
+    prevent_initial_call=True,
+)
+def download_heatmap(n_clicks, list_of_contents, list_of_names):
+    if n_clicks > 0 and list_of_contents is not None and list_of_names is not None:
+        aggregated_df = pd.DataFrame()
+        for contents, name in zip(list_of_contents, list_of_names):
+            df, fname, parse_error = parse_excel(contents, name)
+            if parse_error:
+                continue  # Skip files with errors
+            # Append to aggregated_df
+            aggregated_df = pd.concat([aggregated_df, df], ignore_index=True)
+       
+        # Remove duplicates if any
+        aggregated_df = aggregated_df.drop_duplicates()
+       
+        # 히트맵 생성
+        img_data, _ = create_heatmap(aggregated_df)
+        if img_data is None:
+            return None
+       
+        return dict(content=img_data, filename="heatmap_results.png")
+   
+    return None
 
 # Dash 앱 실행 (Dataiku 환경에 맞게 수정 필요)
 if __name__ == '__main__':
