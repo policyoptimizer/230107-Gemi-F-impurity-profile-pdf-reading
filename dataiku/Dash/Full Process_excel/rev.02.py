@@ -1,4 +1,5 @@
 # 제한적으로 돌아감
+# 피크 개수가 20개를 넘지 않으면 에러남
 
 import dash
 from dash import dcc, html
