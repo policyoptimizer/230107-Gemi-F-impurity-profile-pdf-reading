@@ -1,4 +1,4 @@
-# 히트맵 이미지 수정함
+# 히트맵 이미지 수정중
 
 import dash
 from dash import dcc, html
