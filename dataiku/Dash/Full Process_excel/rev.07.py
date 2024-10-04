@@ -1,4 +1,7 @@
-# 히트맵 이미지 수정중
+# 히트맵 이미지 추가 수정
+# %Area 값이 0.05 ~ 0.1 인 값들만 빨강색으로 표기
+# 나머지는 전부 흰색으로
+# 이걸로 최종 보고
 
 import dash
 from dash import dcc, html
@@ -11,8 +14,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from io import BytesIO
 from dataiku import Folder
-from matplotlib.colors import ListedColormap  # 추가된 모듈
-
+import matplotlib.patches as patches  # 추가된 모듈
+import numpy as np
+import matplotlib.colors as mcolors
+    
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 
@@ -80,8 +85,81 @@ app.layout = html.Div([
 
 # Helper 함수: 엑셀 파일 내용을 파싱하여 DataFrame 반환
 def parse_excel(contents, filename):
-    # ... 기존 코드 그대로 유지 ...
-    pass  # 실제 코드에서는 기존 함수를 그대로 사용하세요.
+    try:
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+        # 엑셀 파일 전체를 읽어 Sample Name 추출
+        excel_data = pd.read_excel(io.BytesIO(decoded), header=None)
+        # G3 셀 (0-based 인덱스: 행 2, 열 6)에 있는 Sample Name 추출
+        sample_name = excel_data.iloc[2, 6] if excel_data.shape[0] > 2 and excel_data.shape[1] > 6 else None
+        if pd.isnull(sample_name):
+            raise ValueError(f"파일 '{filename}'에서 Sample Name을 추출할 수 없습니다.")
+        logging.info(f"Extracted Sample Name: {sample_name} from {filename}")
+
+        # 실제 데이터는 20번째 행부터 시작 (0-based 인덱스 19)
+        raw_data = pd.read_excel(io.BytesIO(decoded), header=19, dtype=str)
+        logging.info(f"Data extracted from {filename} with shape {raw_data.shape}")
+
+        # 첫 번째 세트 (A, C, F, G, H, J, L, D, E)
+        df1 = pd.DataFrame({
+            'Sample Name': sample_name,
+            'Peak Number': pd.to_numeric(raw_data.iloc[:, 0], errors='coerce'),  # A
+            'RT': pd.to_numeric(raw_data.iloc[:, 2], errors='coerce'),  # C
+            'Area': pd.to_numeric(raw_data.iloc[:, 5], errors='coerce'),  # F
+            'Height': pd.to_numeric(raw_data.iloc[:, 6], errors='coerce'),  # G
+            '% Area': pd.to_numeric(raw_data.iloc[:, 7], errors='coerce'),  # H
+            'Total Area': pd.to_numeric(raw_data.iloc[:, 9], errors='coerce'),  # J
+            'Int Type': raw_data.iloc[:, 11],  # L
+            'Area_extra1': pd.to_numeric(raw_data.iloc[:, 3], errors='coerce'),  # D
+            'Area_extra2': pd.to_numeric(raw_data.iloc[:, 4], errors='coerce'),  # E
+        })
+
+        combined_df = df1
+
+        # df2의 컬럼이 존재하는지 확인
+        if raw_data.shape[1] >= 21:
+            # 두 번째 세트 (M, O, Q, R, S, T, U, P, Q)
+            df2 = pd.DataFrame({
+                'Sample Name': sample_name,
+                'Peak Number': pd.to_numeric(raw_data.iloc[:, 12], errors='coerce'),  # M
+                'RT': pd.to_numeric(raw_data.iloc[:, 14], errors='coerce'),  # O
+                'Area': pd.to_numeric(raw_data.iloc[:, 16], errors='coerce'),  # Q
+                'Height': pd.to_numeric(raw_data.iloc[:, 17], errors='coerce'),  # R
+                '% Area': pd.to_numeric(raw_data.iloc[:, 18], errors='coerce'),  # S
+                'Total Area': pd.to_numeric(raw_data.iloc[:, 19], errors='coerce'),  # T
+                'Int Type': raw_data.iloc[:, 20],  # U
+                'Area_extra3': pd.to_numeric(raw_data.iloc[:, 15], errors='coerce'),  # P
+                'Area_extra4': pd.to_numeric(raw_data.iloc[:, 16], errors='coerce'),  # Q
+            })
+
+            # 두 DataFrame 합치기
+            combined_df = pd.concat([df1, df2], ignore_index=True)
+
+        # Area 데이터 정제 (Area_extra1~4를 이용)
+        area_columns = [col for col in ['Area', 'Area_extra1', 'Area_extra2', 'Area_extra3', 'Area_extra4'] if col in combined_df.columns]
+
+        # 모든 행에 대해 가장 먼저 나타나는 유효한 값으로 채우기
+        combined_df['Area'] = combined_df[area_columns].bfill(axis=1).iloc[:, 0]
+
+        # 필요 없는 Area_extra 컬럼 삭제
+        combined_df = combined_df.drop(columns=[col for col in ['Area_extra1', 'Area_extra2', 'Area_extra3', 'Area_extra4'] if col in combined_df.columns])
+
+        # Peak Number와 Sample Name이 NaN인 행 제거
+        combined_df = combined_df.dropna(subset=['Peak Number', 'Sample Name'])
+        combined_df['Peak Number'] = combined_df['Peak Number'].astype(int)
+
+        # 피크 넘버가 1~24인 데이터만 포함
+        combined_df = combined_df[combined_df['Peak Number'].between(1, 24)]
+
+        # 필요한 컬럼만 선택
+        combined_df = combined_df[['Sample Name', 'Peak Number', 'RT', 'Area', 'Height', '% Area', 'Total Area', 'Int Type']]
+
+        logging.info(f"Parsed DataFrame from {filename} with {len(combined_df)} rows.")
+
+        return combined_df, filename, None
+    except Exception as e:
+        logging.error(f"Error parsing {filename}: {e}")
+        return pd.DataFrame(), filename, str(e)
 
 # 히트맵 생성 함수
 def create_heatmap(df):
@@ -124,9 +202,6 @@ def create_heatmap(df):
 
     # 히트맵 생성
     fig, ax = plt.subplots(figsize=(20, 10))
-
-    import numpy as np
-    import matplotlib.colors as mcolors
 
     # 사용자 지정 컬러맵 생성: 0.05 이상 0.1 이하인 값만 빨간색, 나머지는 흰색
     cmap = mcolors.ListedColormap(['white', 'red', 'white'])
