@@ -1,5 +1,5 @@
 # %Area 값이 0.05 이상인 값들은 형광색으로 테두리 함
-# 이걸로 최종 보고함
+# 이걸로 최종 보고서 작성함
 
 import dash
 from dash import dcc, html
